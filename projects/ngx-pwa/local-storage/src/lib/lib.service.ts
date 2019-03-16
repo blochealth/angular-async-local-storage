@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@angular/core';
-import { Observable, throwError, of, OperatorFunction } from 'rxjs';
-import { mergeMap, catchError } from 'rxjs/operators';
+import { Observable, throwError, of, OperatorFunction, ReplaySubject } from 'rxjs';
+import { mergeMap, catchError, tap } from 'rxjs/operators';
 
 import { LocalDatabase } from './databases/local-database';
 import { LocalStorageDatabase } from './databases/localstorage-database';
@@ -30,6 +30,8 @@ export interface LSGetItemOptions {
   providedIn: 'root'
 })
 export class LocalStorage {
+
+  private watched: Map<string, ReplaySubject<any>> = new Map();
 
   /**
    * Number of items in storage
@@ -129,7 +131,10 @@ export class LocalStorage {
 
     return this.database.setItem(key, data)
       /* Catch if `indexedDb` is broken */
-      .pipe(this.catchIDBBroken(() => this.database.setItem(key, data)));
+      .pipe(
+        this.catchIDBBroken(() => this.database.setItem(key, data)),
+        tap(() => { this.notify(key, data); }),
+      );
 
   }
 
@@ -142,7 +147,10 @@ export class LocalStorage {
 
     return this.database.removeItem(key)
       /* Catch if `indexedDb` is broken */
-      .pipe(this.catchIDBBroken(() => this.database.removeItem(key)));
+      .pipe(
+        this.catchIDBBroken(() => this.database.removeItem(key)),
+        tap(() => { this.notify(key, null); }),
+      );
 
   }
 
@@ -154,7 +162,14 @@ export class LocalStorage {
 
     return this.database.clear()
       /* Catch if `indexedDb` is broken */
-      .pipe(this.catchIDBBroken(() => this.database.clear()));
+      .pipe(
+        this.catchIDBBroken(() => this.database.clear()),
+        tap(() => {
+          this.watched.forEach((watched) => {
+            watched.next(null);
+          });
+        }),
+      );
 
   }
 
@@ -179,6 +194,34 @@ export class LocalStorage {
     return this.database.has(key)
       /* Catch if `indexedDb` is broken */
       .pipe(this.catchIDBBroken(() => this.database.has(key)));
+
+  }
+
+  watchItem<T = string>(key: string, schema: JSONSchemaString): Observable<string | null>;
+  watchItem<T = number>(key: string, schema: JSONSchemaInteger | JSONSchemaNumber): Observable<number | null>;
+  watchItem<T = boolean>(key: string, schema: JSONSchemaBoolean): Observable<boolean | null>;
+  watchItem<T = string[]>(key: string, schema: JSONSchemaArrayOf<JSONSchemaString>): Observable<string[] | null>;
+  watchItem<T = number[]>(key: string, schema: JSONSchemaArrayOf<JSONSchemaInteger | JSONSchemaNumber>): Observable<number[] | null>;
+  watchItem<T = boolean[]>(key: string, schema: JSONSchemaArrayOf<JSONSchemaBoolean>): Observable<boolean[] | null>;
+  watchItem<T = any>(key: string, schema: JSONSchema): Observable<T | null>;
+  watchItem<T = unknown>(key: string, schema?: null): Observable<unknown>;
+  watchItem<T = any>(key: string, schema: JSONSchema | null | undefined = null) {
+
+    if (!this.watched.has(key)) {
+
+      const watched = new ReplaySubject<T | null>(1);
+
+      this.watched.set(key, watched);
+
+      this.getItem<T>(key, schema as JSONSchema).subscribe((data) => {
+        watched.next(data);
+      }, (error) => {
+        watched.error(error);
+      });
+
+    }
+
+    return (this.watched.get(key) as ReplaySubject<T | null>).asObservable();
 
   }
 
@@ -227,6 +270,16 @@ export class LocalStorage {
       next: () => {},
       error: () => {},
     });
+
+  }
+
+  private notify(key: string, value: any): void {
+
+    if (this.watched.has(key)) {
+
+      (this.watched.get(key) as ReplaySubject<any>).next(value);
+
+    }
 
   }
 
