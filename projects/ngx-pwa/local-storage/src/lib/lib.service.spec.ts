@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { from } from 'rxjs';
-import { mergeMap, filter, tap } from 'rxjs/operators';
+import { mergeMap, filter, tap, switchMap } from 'rxjs/operators';
 
 import { LocalStorage } from './lib.service';
 import { IndexedDBDatabase } from './databases/indexeddb-database';
@@ -741,6 +741,53 @@ function tests(description: string, localStorageServiceFactory: () => LocalStora
           }, 50);
 
         });
+
+      });
+
+    });
+
+    describe('watchItem', () => {
+
+      // TODO: tests with invalid schema and with no schema
+
+      it('valid', (done) => {
+
+        const index = 'watched';
+        const value1 = 'value1';
+        const value2 = 'value2';
+        const value3 = 'value3';
+        let i = 0;
+
+        const watched = localStorageService.watchItem(index, { type: 'string' }).subscribe((data) => {
+
+          switch (i) {
+            case 0:
+            case 2:
+            case 4:
+              expect(data).toBeNull();
+              break;
+            case 1:
+              expect(data).toBe(value1);
+              break;
+            case 3:
+              expect(data).toBe(value2);
+              break;
+            case 5:
+              expect(data).toBe(value3);
+              watched.unsubscribe();
+              done();
+          }
+
+          i += 1;
+
+        });
+
+        localStorageService.setItem(index, value1).pipe(
+          switchMap(() => localStorageService.removeItem(index)),
+          switchMap(() => localStorageService.setItem(index, value2)),
+          switchMap(() => localStorageService.clear()),
+          tap(() => { localStorageService.setItemSubscribe(index, value3); }),
+        ).subscribe();
 
       });
 

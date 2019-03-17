@@ -202,7 +202,7 @@ export class LocalStorage {
    * The signature has many overloads due to validation, **please refer to the documentation.**
    * @see https://github.com/cyrilletuzi/angular-async-local-storage/blob/master/docs/VALIDATION.md
    * @param key The item's key
-   * @returns The item's value if the key exists, `null` otherwise, wrapped in a RxJS `Observable`
+   * @returns The item's value if the key exists *and* if the value is valid, `null` otherwise, wrapped in a RxJS `Observable`
    */
   watchItem<T = string>(key: string, schema: JSONSchemaString): Observable<string | null>;
   watchItem<T = number>(key: string, schema: JSONSchemaInteger | JSONSchemaNumber): Observable<number | null>;
@@ -221,14 +221,15 @@ export class LocalStorage {
 
       this.watched.set(key, watched);
 
-      // TOOD: investigate the cast
       /* Get the current value */
-      this.getItem<T>(key, schema as JSONSchema).subscribe((data) => {
-        watched.next(data);
-      }, (error) => {
-        watched.error(error);
-        // TODO: what to do on error?
-        // this.watched.delete(key);
+      this.getItem<T>(key, schema as JSONSchema).subscribe({
+        next: (data) => {
+          watched.next(data);
+        },
+        error: () => {
+          /* As it's a watching `Observable`, it should not complete, so `null` is emitted on error */
+          watched.next(null);
+        }
       });
 
     }
