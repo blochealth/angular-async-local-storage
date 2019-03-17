@@ -31,6 +31,7 @@ export interface LSGetItemOptions {
 })
 export class LocalStorage {
 
+  /** Watched items */
   private watched: Map<string, ReplaySubject<any>> = new Map();
 
   /**
@@ -129,12 +130,12 @@ export class LocalStorage {
    */
   setItem(key: string, data: any): Observable<boolean> {
 
-    return this.database.setItem(key, data)
+    return this.database.setItem(key, data).pipe(
       /* Catch if `indexedDb` is broken */
-      .pipe(
-        this.catchIDBBroken(() => this.database.setItem(key, data)),
-        tap(() => { this.notify(key, data); }),
-      );
+      this.catchIDBBroken(() => this.database.setItem(key, data)),
+      /* Notify if this key is watched */
+      tap(() => { this.notify(key, data); }),
+    );
 
   }
 
@@ -145,12 +146,12 @@ export class LocalStorage {
    */
   removeItem(key: string): Observable<boolean> {
 
-    return this.database.removeItem(key)
+    return this.database.removeItem(key).pipe(
       /* Catch if `indexedDb` is broken */
-      .pipe(
-        this.catchIDBBroken(() => this.database.removeItem(key)),
-        tap(() => { this.notify(key, null); }),
-      );
+      this.catchIDBBroken(() => this.database.removeItem(key)),
+      /* Notify if this key is watched */
+      tap(() => { this.notify(key, null); }),
+    );
 
   }
 
@@ -160,16 +161,12 @@ export class LocalStorage {
    */
   clear(): Observable<boolean> {
 
-    return this.database.clear()
+    return this.database.clear().pipe(
       /* Catch if `indexedDb` is broken */
-      .pipe(
-        this.catchIDBBroken(() => this.database.clear()),
-        tap(() => {
-          this.watched.forEach((watched) => {
-            watched.next(null);
-          });
-        }),
-      );
+      this.catchIDBBroken(() => this.database.clear()),
+      /* Notify if all watched keys */
+      tap(() => { this.notifyAll(null); }),
+    );
 
   }
 
@@ -197,6 +194,16 @@ export class LocalStorage {
 
   }
 
+  /**
+   * Get an item value in storage and then watch any change.
+   * **WARNING**: do *not* do a write operation on the same key inside this `Observable`, or you'll create an infinite loop.
+   * Note: you'll only be notified for changes happening via this lib, *not* from storage changes from other APIs.
+   * Note: this `Observable` never completes, so be sure to `unsubscribe()` or to use the `async` pipe.
+   * The signature has many overloads due to validation, **please refer to the documentation.**
+   * @see https://github.com/cyrilletuzi/angular-async-local-storage/blob/master/docs/VALIDATION.md
+   * @param key The item's key
+   * @returns The item's value if the key exists, `null` otherwise, wrapped in a RxJS `Observable`
+   */
   watchItem<T = string>(key: string, schema: JSONSchemaString): Observable<string | null>;
   watchItem<T = number>(key: string, schema: JSONSchemaInteger | JSONSchemaNumber): Observable<number | null>;
   watchItem<T = boolean>(key: string, schema: JSONSchemaBoolean): Observable<boolean | null>;
@@ -209,18 +216,24 @@ export class LocalStorage {
 
     if (!this.watched.has(key)) {
 
+      /* Creates an `Observable` which keeps track of the last value */
       const watched = new ReplaySubject<T | null>(1);
 
       this.watched.set(key, watched);
 
+      // TOOD: investigate the cast
+      /* Get the current value */
       this.getItem<T>(key, schema as JSONSchema).subscribe((data) => {
         watched.next(data);
       }, (error) => {
         watched.error(error);
+        // TODO: what to do on error?
+        // this.watched.delete(key);
       });
 
     }
 
+    /* Returns as `Observable` so methods like `.next()` can't be used in public API */
     return (this.watched.get(key) as ReplaySubject<T | null>).asObservable();
 
   }
@@ -273,13 +286,32 @@ export class LocalStorage {
 
   }
 
-  private notify(key: string, value: any): void {
+  /**
+   * Notify `Observable`s watching this key with the new value
+   * @param key The item's key
+   * @param data The item's value
+   */
+  private notify(key: string, data: any): void {
 
-    if (this.watched.has(key)) {
+    const watched = this.watched.get(key);
 
-      (this.watched.get(key) as ReplaySubject<any>).next(value);
+    if (watched) {
+
+      watched.next(data);
 
     }
+
+  }
+
+  /**
+   * Notify all `Observable`s watching keys
+   * @param data The item's value
+   */
+  private notifyAll(data: any): void {
+
+    this.watched.forEach((watched) => {
+      watched.next(data);
+    });
 
   }
 
